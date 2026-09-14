@@ -1,0 +1,120 @@
+# Path:     .github/workflows/ci.yml
+# Project:  revisualized.com demo repositories
+# Revision: 4
+# Updated:  2026-09-07 (rev 4 same day)
+# Note:     Identical file for all demo repos. Revision 2 said "all three",
+#           which was true when it was written and is now six.
+#
+#           Revision 2 had a defect that only showed on a Python repo. The
+#           bats job gated on `if [ -d test ]`, and log-triage-helper has a
+#           test/ directory containing one .py file and no .bats. bats exits
+#           non-zero when a directory yields no test files, so that repo's
+#           CI badge reported a failure caused entirely by the workflow.
+#           The gate now tests for .bats files rather than for a directory
+#           that happens to be named test.
+#
+#           Revision 3 also adds a python job, because two of the six repos
+#           are Python and Revision 2 checked neither. Both jobs skip
+#           cleanly when the language is absent, so one file still serves
+#           every repo.
+name: ci
+on: [push, pull_request]
+
+jobs:
+  shellcheck:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install shellcheck
+        run: sudo apt-get update && sudo apt-get install -y shellcheck
+      - name: Static analysis of every shell script
+        run: |
+          set -euo pipefail
+          if [ -z "$(find . -name '*.sh' -type f -not -path './.git/*')" ]; then
+            echo "No shell scripts found to check."
+            exit 0
+          fi
+          find . -name '*.sh' -type f -not -path './.git/*' -print0 \
+            | xargs -0 shellcheck --severity=style
+
+  bats:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install bats
+        run: sudo apt-get update && sudo apt-get install -y bats
+      - name: Run bats tests
+        run: |
+          set -euo pipefail
+          # Gate on the presence of .bats files, not on a directory name.
+          # A test/ directory holding only Python is not a bats suite, and
+          # asking bats to run it fails the build for the wrong reason.
+          if [ -z "$(find . -name '*.bats' -type f -not -path './.git/*')" ]; then
+            echo "No bats tests found."
+            exit 0
+          fi
+          find . -name '*.bats' -type f -not -path './.git/*' -print0 \
+            | xargs -0 bats
+
+  python:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.9"
+      - name: Byte-compile every module
+        run: |
+          set -euo pipefail
+          if [ -z "$(find . -name '*.py' -type f -not -path './.git/*')" ]; then
+            echo "No Python sources found to compile."
+            exit 0
+          fi
+          find . -name '*.py' -type f -not -path './.git/*' -print0 \
+            | xargs -0 python -m py_compile
+      - name: Run unittest suite
+        run: |
+          set -euo pipefail
+          if [ -z "$(find test -name 'test_*.py' -type f 2>/dev/null)" ]; then
+            echo "No unittest suite found."
+            exit 0
+          fi
+          python -m unittest discover -s test -v
+
+  # A test suite that has only ever run against correct code has been
+  # demonstrated, not tested. This job reintroduces a specific known defect
+  # and fails the build if the suite still passes. It runs only where the
+  # repository declares a negative control to apply.
+  negative-control:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.9"
+      - name: Suite must fail when a known defect is reintroduced
+        run: |
+          set -euo pipefail
+          target=smtp_alert_dispatcher.py
+          if [ ! -f test/inject_defect.py ]; then
+            echo "No negative control declared for this repository."
+            exit 0
+          fi
+          cp "$target" /tmp/original.py
+          trap 'cp /tmp/original.py "$target"' EXIT
+          for defect in $(python test/inject_defect.py --list) ; do
+            cp /tmp/original.py "$target"
+            python test/inject_defect.py "$defect"
+            set +e
+            python -m unittest discover -s test > /tmp/negative.log 2>&1
+            status=$?
+            set -e
+            if [ "$status" -eq 0 ]; then
+              echo "::error::Suite passed with '${defect}' injected. That regression is not gated."
+              cat /tmp/negative.log
+              exit 1
+            fi
+            echo "Suite rejected '${defect}' as expected (exit ${status})."
+          done
