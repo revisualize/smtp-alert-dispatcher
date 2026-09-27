@@ -1,120 +1,159 @@
 # Path:     .github/workflows/ci.yml
-# Project:  revisualized.com demo repositories
-# Revision: 4
-# Updated:  2026-09-07 (rev 4 same day)
-# Note:     Identical file for all demo repos. Revision 2 said "all three",
-#           which was true when it was written and is now six.
+# Project:  revisualized.com public repositories (github.com/revisualize)
+# Revision: 8
+# Updated:  2026-09-26
 #
-#           Revision 2 had a defect that only showed on a Python repo. The
-#           bats job gated on `if [ -d test ]`, and log-triage-helper has a
-#           test/ directory containing one .py file and no .bats. bats exits
-#           non-zero when a directory yields no test files, so that repo's
-#           CI badge reported a failure caused entirely by the workflow.
-#           The gate now tests for .bats files rather than for a directory
-#           that happens to be named test.
+# Purpose:  One workflow, byte-identical in every repository that carries it.
+#           It knows nothing about any single repository. Each repository
+#           declares its own tests in test/run_all_tests.sh, which is the same
+#           command a reader runs locally:
 #
-#           Revision 3 also adds a python job, because two of the six repos
-#           are Python and Revision 2 checked neither. Both jobs skip
-#           cleanly when the language is absent, so one file still serves
-#           every repo.
+#               bash test/run_all_tests.sh;
+#
+# Contract: 1. test/run_all_tests.sh must exist. A repository that declares
+#              no tests fails. It is not reported as passing.
+#           2. The harness exits 0 only when every suite it runs has passed.
+#           3. For each suite, the harness appends a line
+#              "<label><TAB><count>" to the file named by TESTS_EXECUTED_FILE.
+#              The build fails if that file is missing, malformed, or totals
+#              zero, so a harness that ran nothing cannot report success.
+#              This catches an accidental zero. It cannot catch a harness
+#              that misreports its own count. Negative controls inside the
+#              harnesses are what test the tests.
+#
+#           Shell files under any test/fixtures/ directory are test data and
+#           are not linted, because a fixture may be hazardous on purpose.
+#
+# Pins:     ubuntu-24.04 rather than ubuntu-latest, so the environment a
+#           launched repository was verified against does not change under
+#           it. Python 3.9 is not published for Ubuntu 26.04 in the
+#           actions/python-versions manifest (checked 2026-09-26), so a
+#           moving label would eventually break the 3.9 leg.
+#           Python 3.9 is the oldest version any repository claims. 3.12
+#           adds a current release, and its unittest exits 5 when no test
+#           ran, which 3.9 does not.
+#
+# Revision 8 replaces Revisions 4 through 7. Those revisions detected each
+# language and skipped cleanly when a suite was absent, so a repository with
+# no tests reported the same success as one with fifty, and the negative
+# control job named files from three unrelated repositories.
+
 name: ci
-on: [push, pull_request]
+
+on:
+  push:
+  pull_request:
+
+permissions:
+  contents: read
+
+defaults:
+  run:
+    shell: bash
 
 jobs:
-  shellcheck:
-    runs-on: ubuntu-latest
+  lint:
+    runs-on: ubuntu-24.04
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
+
       - name: Install shellcheck
-        run: sudo apt-get update && sudo apt-get install -y shellcheck
-      - name: Static analysis of every shell script
         run: |
-          set -euo pipefail
-          if [ -z "$(find . -name '*.sh' -type f -not -path './.git/*')" ]; then
-            echo "No shell scripts found to check."
-            exit 0
-          fi
-          find . -name '*.sh' -type f -not -path './.git/*' -print0 \
-            | xargs -0 shellcheck --severity=style
+          sudo apt-get update -q;
+          sudo apt-get install -y -q shellcheck;
+          shellcheck --version;
 
-  bats:
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-      - name: Install bats
-        run: sudo apt-get update && sudo apt-get install -y bats
-      - name: Run bats tests
+      - name: Static analysis of every shell script outside test fixtures
         run: |
-          set -euo pipefail
-          # Gate on the presence of .bats files, not on a directory name.
-          # A test/ directory holding only Python is not a bats suite, and
-          # asking bats to run it fails the build for the wrong reason.
-          if [ -z "$(find . -name '*.bats' -type f -not -path './.git/*')" ]; then
-            echo "No bats tests found."
-            exit 0
-          fi
-          find . -name '*.bats' -type f -not -path './.git/*' -print0 \
-            | xargs -0 bats
+          set -euo pipefail;
+          mapfile -d '' shell_files < <(find . -name '*.sh' -type f \
+            -not -path './.git/*' -not -path '*/test/fixtures/*' -print0 | sort -z);
+          if [ "${#shell_files[@]}" -eq 0 ]; then
+            echo "No shell scripts outside test/fixtures/. Nothing to lint.";
+            echo "shellcheck: no shell scripts to lint" >> "${GITHUB_STEP_SUMMARY}";
+            exit 0;
+          fi;
+          printf 'Linting %s\n' "${shell_files[@]}";
+          shellcheck --severity=style "${shell_files[@]}";
+          echo "shellcheck: ${#shell_files[@]} files, no findings" >> "${GITHUB_STEP_SUMMARY}";
 
-  python:
-    runs-on: ubuntu-latest
+  test:
+    runs-on: ubuntu-24.04
+    strategy:
+      fail-fast: false
+      matrix:
+        python-version: ["3.9", "3.12"]
     steps:
-      - uses: actions/checkout@v4
-      - name: Set up Python
-        uses: actions/setup-python@v5
+      - uses: actions/checkout@v7
+
+      - uses: actions/setup-python@v7
         with:
-          python-version: "3.9"
-      - name: Byte-compile every module
-        run: |
-          set -euo pipefail
-          if [ -z "$(find . -name '*.py' -type f -not -path './.git/*')" ]; then
-            echo "No Python sources found to compile."
-            exit 0
-          fi
-          find . -name '*.py' -type f -not -path './.git/*' -print0 \
-            | xargs -0 python -m py_compile
-      - name: Run unittest suite
-        run: |
-          set -euo pipefail
-          if [ -z "$(find test -name 'test_*.py' -type f 2>/dev/null)" ]; then
-            echo "No unittest suite found."
-            exit 0
-          fi
-          python -m unittest discover -s test -v
+          python-version: ${{ matrix.python-version }}
 
-  # A test suite that has only ever run against correct code has been
-  # demonstrated, not tested. This job reintroduces a specific known defect
-  # and fails the build if the suite still passes. It runs only where the
-  # repository declares a negative control to apply.
-  negative-control:
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-      - name: Set up Python
-        uses: actions/setup-python@v5
-        with:
-          python-version: "3.9"
-      - name: Suite must fail when a known defect is reintroduced
+      - name: Install bats when the repository has bats suites
         run: |
-          set -euo pipefail
-          target=smtp_alert_dispatcher.py
-          if [ ! -f test/inject_defect.py ]; then
-            echo "No negative control declared for this repository."
-            exit 0
-          fi
-          cp "$target" /tmp/original.py
-          trap 'cp /tmp/original.py "$target"' EXIT
-          for defect in $(python test/inject_defect.py --list) ; do
-            cp /tmp/original.py "$target"
-            python test/inject_defect.py "$defect"
-            set +e
-            python -m unittest discover -s test > /tmp/negative.log 2>&1
-            status=$?
-            set -e
-            if [ "$status" -eq 0 ]; then
-              echo "::error::Suite passed with '${defect}' injected. That regression is not gated."
-              cat /tmp/negative.log
-              exit 1
-            fi
-            echo "Suite rejected '${defect}' as expected (exit ${status})."
-          done
+          set -euo pipefail;
+          if [ -n "$(find . -name '*.bats' -type f -not -path './.git/*' -print -quit)" ]; then
+            sudo apt-get update -q;
+            sudo apt-get install -y -q bats;
+            bats --version;
+          else
+            echo "No .bats files. bats not installed.";
+          fi;
+
+      - name: Install declared Python dependencies
+        run: |
+          set -euo pipefail;
+          if [ -f requirements.txt ]; then
+            python -m pip install -r requirements.txt;
+          else
+            echo "No requirements.txt. Standard library only.";
+          fi;
+
+      - name: Byte-compile every Python module outside test fixtures
+        run: |
+          set -euo pipefail;
+          mapfile -d '' python_files < <(find . -name '*.py' -type f \
+            -not -path './.git/*' -not -path '*/test/fixtures/*' -print0 | sort -z);
+          if [ "${#python_files[@]}" -eq 0 ]; then
+            echo "No Python modules. Nothing to compile.";
+            exit 0;
+          fi;
+          python -m py_compile "${python_files[@]}";
+          echo "Compiled ${#python_files[@]} modules under $(python --version).";
+
+      - name: Run the declared test entry point
+        env:
+          TESTS_EXECUTED_FILE: ${{ runner.temp }}/tests_executed.tsv
+        run: |
+          set -euo pipefail;
+          if [ ! -f test/run_all_tests.sh ]; then
+            echo "::error title=No tests declared::test/run_all_tests.sh is missing. This workflow does not report success for a repository that declares no tests.";
+            exit 1;
+          fi;
+          bash test/run_all_tests.sh;
+
+      - name: Require that tests actually ran
+        env:
+          TESTS_EXECUTED_FILE: ${{ runner.temp }}/tests_executed.tsv
+        run: |
+          set -euo pipefail;
+          if [ ! -s "${TESTS_EXECUTED_FILE}" ]; then
+            echo "::error title=No test count reported::The harness exited 0 but reported no executed tests. A pass that ran nothing is not a pass.";
+            exit 1;
+          fi;
+          {
+            echo "### Tests executed, Python ${{ matrix.python-version }}";
+            echo "";
+            echo "| Suite | Count |";
+            echo "|---|---|";
+          } >> "${GITHUB_STEP_SUMMARY}";
+          awk -F '\t' -v summary="${GITHUB_STEP_SUMMARY}" '
+            NF != 2 || $2 !~ /^[0-9]+$/ { malformed = 1; print "malformed line " NR ": " $0; next; }
+            { total += $2; printf "%-50s %s\n", $1, $2; printf "| %s | %s |\n", $1, $2 >> summary; }
+            END {
+              printf "| **Total** | **%d** |\n", total >> summary;
+              if (malformed) { print "::error title=Malformed test count::see the lines above"; exit 1; }
+              if (total == 0) { print "::error title=Zero tests executed::every suite reported a count of zero"; exit 1; }
+              printf "Total tests executed: %d\n", total;
+            }' "${TESTS_EXECUTED_FILE}";
