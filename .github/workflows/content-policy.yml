@@ -1,0 +1,176 @@
+# Path:     .github/workflows/content-policy.yml
+# Project:  revisualized.com public repositories (github.com/revisualize)
+# Revision: 1
+# Updated:  2026-09-29
+#
+# Purpose:  Enforces the publishing rules every revisualize repository is held
+#           to, over every file git tracks. Byte-identical in every repository.
+#
+# Rules:    required-files     README.md, LICENSE and test/run_all_tests.sh exist.
+#           utf8               Every text file decodes as UTF-8.
+#           line-endings       No CRLF line endings.
+#           final-newline      Every text file ends with a newline.
+#           trailing-space     No trailing spaces or tabs.
+#           dashes             No em dash or en dash characters.
+#           shebang            Every .sh file starts with #!/usr/bin/env bash.
+#           invocation         Markdown never runs a script as ./name.sh.
+#                              The upload path these repositories use does not
+#                              preserve the executable bit, so the documented
+#                              form is bash name.sh.
+#           neutral-terms      Vendor neutrality: no restricted product or
+#                              company names, and no restricted path root.
+#
+#           Files under any test/fixtures/ or examples/ directory are captured
+#           or deliberately hazardous output. They are exempt from the
+#           typography rules (final-newline, trailing-space, dashes) and held
+#           to every other rule.
+#
+#           The neutral-terms list is stored as SHA-256 digests of the
+#           lowercased words. That is not secrecy, since a short word list is
+#           easy to recover. It keeps the names themselves off the published
+#           surface the rule protects. Findings name the file and line only.
+#
+# Contract: Exits 1 on any finding and writes one row per rule to the job
+#           summary, with the number of files each rule examined, so a rule
+#           that examined nothing is visible.
+
+name: content-policy
+
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+defaults:
+  run:
+    shell: bash
+
+jobs:
+  content-policy:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: actions/setup-python@v7
+        with:
+          python-version: "3.12"
+
+      - name: Check every tracked file against the publishing rules
+        run: |
+          set -euo pipefail;
+          python3 - <<'POLICY_SCRIPT'
+          import hashlib
+          import os
+          import re
+          import subprocess
+          import sys
+
+          restricted_word_digests = {
+              "43c448b8b0e58c2e51ddea6f695e940b855f98417059c2723c1fdae4757f64ec",
+              "1a259433775060a686903435b3ea6084c80cf18eb5c7e6cc16e81104de352bfb",
+              "446263efc37f6a8a366e9bfcd78a672ca27a99e5985cc3a54d6a2fa3298ef488",
+              "d0e2ece166bdef23adedfaa3f1c47c9f969270f0fc519185514d58b4c7f6d199",
+              "db5c954d8344ef623f13a7fdce0148b1fbce9c0f54a2ba4e806d9c25b47233c9",
+          }
+          restricted_path_root_digests = {
+              "45c8bee66b300f2cbe3a4c7256fcfac31722e2a71136c16efd44e7716befa246",
+          }
+          rule_names = [
+              "required-files", "utf8", "line-endings", "final-newline",
+              "trailing-space", "dashes", "shebang", "invocation", "neutral-terms",
+          ]
+          examined = {rule_name: 0 for rule_name in rule_names}
+          findings = {rule_name: [] for rule_name in rule_names}
+
+          def digest(word):
+              return hashlib.sha256(word.lower().encode("utf-8")).hexdigest()
+
+          def report(rule_name, path, line_number, message):
+              findings[rule_name].append((path, line_number, message))
+              location = f"file={path},line={line_number}" if line_number else f"file={path}"
+              print(f"::error {location},title={rule_name}::{message}")
+
+          for required_path in ("README.md", "LICENSE", "test/run_all_tests.sh"):
+              examined["required-files"] += 1
+              if not os.path.isfile(required_path):
+                  report("required-files", required_path, 0, f"{required_path} is missing")
+
+          tracked_paths = subprocess.run(
+              ["git", "ls-files", "-z"], check=True, capture_output=True
+          ).stdout.decode("utf-8").split("\0")
+          tracked_paths = sorted(path for path in tracked_paths if path)
+
+          invocation_pattern = re.compile(r"(^|[\s`(])\./[\w./-]+\.sh\b")
+          path_root_pattern = re.compile(r"/([A-Za-z]+)(?=/|\b)")
+          word_pattern = re.compile(r"[A-Za-z]+")
+
+          for path in tracked_paths:
+              if not os.path.isfile(path):
+                  continue
+              with open(path, "rb") as file_handle:
+                  raw_bytes = file_handle.read()
+              if b"\0" in raw_bytes:
+                  continue
+              examined["utf8"] += 1
+              try:
+                  text = raw_bytes.decode("utf-8")
+              except UnicodeDecodeError as decode_error:
+                  report("utf8", path, 0, f"not valid UTF-8 at byte {decode_error.start}")
+                  continue
+              captured_output = "/test/fixtures/" in f"/{path}" or path.startswith("examples/") or "/examples/" in f"/{path}"
+              lines = text.split("\n")
+
+              examined["line-endings"] += 1
+              if "\r\n" in text:
+                  report("line-endings", path, text[: text.index("\r\n")].count("\n") + 1, "CRLF line ending")
+
+              examined["neutral-terms"] += 1
+              for line_number, line in enumerate(lines, start=1):
+                  if any(digest(word) in restricted_word_digests for word in word_pattern.findall(line)):
+                      report("neutral-terms", path, line_number, "restricted term")
+                  if any(digest(segment) in restricted_path_root_digests for segment in path_root_pattern.findall(line)):
+                      report("neutral-terms", path, line_number, "restricted path root")
+
+              if path.endswith(".md"):
+                  examined["invocation"] += 1
+                  for line_number, line in enumerate(lines, start=1):
+                      if invocation_pattern.search(line):
+                          report("invocation", path, line_number, "script run as ./name.sh; document it as bash name.sh")
+
+              if path.endswith(".sh") and "/test/fixtures/" not in f"/{path}":
+                  examined["shebang"] += 1
+                  if not text.startswith("#!/usr/bin/env bash\n"):
+                      report("shebang", path, 1, "first line is not #!/usr/bin/env bash")
+
+              if captured_output:
+                  continue
+
+              examined["final-newline"] += 1
+              if text and not text.endswith("\n"):
+                  report("final-newline", path, len(lines), "no newline at end of file")
+
+              examined["trailing-space"] += 1
+              examined["dashes"] += 1
+              for line_number, line in enumerate(lines, start=1):
+                  if line.rstrip("\r") != line.rstrip("\r").rstrip(" \t"):
+                      report("trailing-space", path, line_number, "trailing whitespace")
+                  if chr(0x2014) in line or chr(0x2013) in line:
+                      report("dashes", path, line_number, "em dash or en dash character")
+
+          summary_lines = [
+              "### Content policy", "",
+              "| Rule | Files examined | Findings |", "|---|---|---|",
+          ]
+          total_findings = 0
+          for rule_name in rule_names:
+              total_findings += len(findings[rule_name])
+              summary_lines.append(f"| {rule_name} | {examined[rule_name]} | {len(findings[rule_name])} |")
+              print(f"{rule_name:16} examined {examined[rule_name]:4}  findings {len(findings[rule_name])}")
+          summary_lines += ["", f"{len(tracked_paths)} tracked files, {total_findings} findings."]
+          with open(os.environ["GITHUB_STEP_SUMMARY"], "a", encoding="utf-8") as summary_handle:
+              summary_handle.write("\n".join(summary_lines) + "\n")
+          sys.exit(1 if total_findings else 0)
+          POLICY_SCRIPT

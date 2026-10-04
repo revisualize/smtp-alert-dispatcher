@@ -1,0 +1,68 @@
+# Path:     .github/workflows/markdown-lint.yml
+# Project:  revisualized.com public repositories (github.com/revisualize)
+# Revision: 1
+# Updated:  2026-09-29
+#
+# Purpose:  Lints every Markdown file with markdownlint. Byte-identical in every
+#           repository that carries it.
+#
+# Rules:    Every default rule, with three changes, each for a stated reason:
+#           MD013 line-length    off. Prose wraps where the author wrapped it,
+#                                and tables and URLs cannot wrap at all.
+#           MD060 table-column   off. Cell padding inside a table is cosmetic
+#                                and GitHub renders both styles identically.
+#           MD024 duplicate      siblings only. A changelog repeats
+#                 headings       "### Added" under every release, correctly.
+#
+#           Generated output under examples/ and test/fixtures/ is excluded,
+#           because it records what a tool printed.
+#
+# Contract: A repository with no Markdown outside those directories fails.
+#
+# Pins:     markdownlint-cli2 0.22.1 (markdownlint 0.40.0), the version these
+#           files were verified against on 2026-09-29, so a new upstream rule
+#           cannot turn a badge red without a change to the repository.
+
+name: markdown-lint
+
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+defaults:
+  run:
+    shell: bash
+
+jobs:
+  markdown-lint:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Lint every Markdown file outside generated output
+        run: |
+          set -euo pipefail;
+          mapfile -d '' markdown_files < <(find . -name '*.md' -type f \
+            -not -path './.git/*' -not -path '*/examples/*' -not -path '*/test/fixtures/*' -print0 | sort -z);
+          if [ "${#markdown_files[@]}" -eq 0 ]; then
+            echo "::error title=No Markdown::No Markdown files outside generated output. A lint pass over zero files is not reported as passing.";
+            exit 1;
+          fi;
+          configuration_file="${RUNNER_TEMP}/markdownlint.jsonc";
+          cat > "${configuration_file}" <<'CONFIGURATION'
+          {
+            "config": {
+              "default": true,
+              "MD013": false,
+              "MD060": false,
+              "MD024": { "siblings_only": true }
+            }
+          }
+          CONFIGURATION
+          printf 'Linting %s\n' "${markdown_files[@]}";
+          npx --yes markdownlint-cli2@0.22.1 --config "${configuration_file}" "${markdown_files[@]}";
+          echo "markdownlint: ${#markdown_files[@]} files, no findings" >> "${GITHUB_STEP_SUMMARY}";

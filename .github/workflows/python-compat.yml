@@ -1,0 +1,106 @@
+# Path:     .github/workflows/python-compat.yml
+# Project:  revisualized.com public repositories (github.com/revisualize)
+# Revision: 1
+# Updated:  2026-09-29
+#
+# Purpose:  Runs the repository's own test entry point under every supported
+#           Python release from 3.9 to 3.14:
+#
+#               bash test/run_all_tests.sh;
+#
+#           ci.yml covers 3.9, the oldest version any README claims, and 3.12.
+#           This workflow fills in every release between them and the newest
+#           one after, so "Python 3.9 or newer" is tested as a range rather
+#           than at its two ends. Byte-identical in every repository that
+#           carries it.
+#
+# Contract: The harness contract from ci.yml applies unchanged: every suite
+#           appends "<label><TAB><count>" to TESTS_EXECUTED_FILE, and a total
+#           of zero fails the leg. Each leg also confirms that python3 on
+#           PATH is the version under test before it runs anything.
+#
+# Verified: The four repositories' harnesses were run under 3.10, 3.11, 3.12,
+#           3.13 and 3.14 on 2026-09-29 before release. 3.9 is covered by the
+#           passing ci.yml runs.
+
+name: python-compat
+
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+defaults:
+  run:
+    shell: bash
+
+jobs:
+  python-compat:
+    name: python ${{ matrix.python-version }}
+    runs-on: ubuntu-24.04
+    strategy:
+      fail-fast: false
+      matrix:
+        python-version: ["3.9", "3.10", "3.11", "3.12", "3.13", "3.14"]
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: actions/setup-python@v7
+        with:
+          python-version: ${{ matrix.python-version }}
+
+      - name: Confirm python3 is the version under test
+        env:
+          PYTHON_VERSION_UNDER_TEST: ${{ matrix.python-version }}
+        run: |
+          set -euo pipefail;
+          answering_version="$(python3 -c 'import sys; print("%d.%d" % sys.version_info[:2])')";
+          echo "python3 answers $(python3 --version)";
+          if [ "${answering_version}" != "${PYTHON_VERSION_UNDER_TEST}" ]; then
+            echo "::error title=Wrong Python::expected ${PYTHON_VERSION_UNDER_TEST}, got ${answering_version}";
+            exit 1;
+          fi;
+
+      - name: Install bats when the repository has bats suites
+        run: |
+          set -euo pipefail;
+          if [ -n "$(find . -name '*.bats' -type f -not -path './.git/*' -print -quit)" ]; then
+            sudo apt-get update -q;
+            sudo apt-get install -y -q bats;
+          else
+            echo "No .bats files. bats not installed.";
+          fi;
+
+      - name: Run the declared test entry point
+        env:
+          TESTS_EXECUTED_FILE: ${{ runner.temp }}/tests_executed.tsv
+        run: |
+          set -euo pipefail;
+          if [ ! -f test/run_all_tests.sh ]; then
+            echo "::error title=No tests declared::test/run_all_tests.sh is missing.";
+            exit 1;
+          fi;
+          bash test/run_all_tests.sh;
+
+      - name: Require that tests actually ran
+        env:
+          TESTS_EXECUTED_FILE: ${{ runner.temp }}/tests_executed.tsv
+          PYTHON_VERSION_UNDER_TEST: ${{ matrix.python-version }}
+        run: |
+          set -euo pipefail;
+          if [ ! -s "${TESTS_EXECUTED_FILE}" ]; then
+            echo "::error title=No test count reported::The harness exited 0 but reported no executed tests.";
+            exit 1;
+          fi;
+          awk -F '\t' -v summary="${GITHUB_STEP_SUMMARY}" -v version="${PYTHON_VERSION_UNDER_TEST}" '
+            NF != 2 || $2 !~ /^[0-9]+$/ { malformed = 1; print "malformed line " NR ": " $0; next; }
+            { total += $2; }
+            END {
+              if (malformed) { print "::error title=Malformed test count::see the lines above"; exit 1; }
+              if (total == 0) { print "::error title=Zero tests executed::every suite reported a count of zero"; exit 1; }
+              printf "Python %s: %d tests executed, all passed\n", version, total;
+              printf "Python %s: %d tests executed, all passed\n", version, total >> summary;
+            }' "${TESTS_EXECUTED_FILE}";

@@ -1,0 +1,94 @@
+# Path:     .github/workflows/codeql.yml
+# Project:  revisualized.com public repositories (github.com/revisualize)
+# Revision: 1
+# Updated:  2026-09-29
+#
+# Purpose:  GitHub CodeQL security analysis of the Python code, with CodeQL's
+#           default security query suite. Results appear under the
+#           repository's Security tab. Byte-identical in every repository that
+#           carries it.
+#
+# Contract: CodeQL itself reports success whenever the analysis completes,
+#           even when it raised alerts, so its badge alone would stay green
+#           over open findings. The last step reads the SARIF file the
+#           analysis wrote and fails the run when it holds any result.
+#
+# Scope:    Python only. CodeQL has no Bash analyzer; shell code is covered by
+#           shellcheck.yml. Python is interpreted, so no build step is needed
+#           (build-mode: none).
+#
+# Setup:    This is CodeQL's "advanced setup". If "default setup" is enabled
+#           under Settings, Code security, the upload step fails, because
+#           GitHub accepts one configuration per repository. Leave default
+#           setup off where this file is installed.
+#
+# Schedule: Weekly as well as on push, because new queries ship with CodeQL
+#           releases and can find issues in code that has not changed.
+
+name: codeql
+
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+  schedule:
+    - cron: "41 15 * * 1"
+
+permissions:
+  contents: read
+
+jobs:
+  analyze:
+    name: analyze python
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: read
+      security-events: write
+      actions: read
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Initialize CodeQL
+        uses: github/codeql-action/init@v4
+        with:
+          languages: python
+          build-mode: none
+
+      - name: Analyze
+        id: analyze
+        uses: github/codeql-action/analyze@v4
+        with:
+          category: "/language:python"
+
+      - name: Fail when the analysis reported any result
+        env:
+          SARIF_DIRECTORY: ${{ steps.analyze.outputs.sarif-output }}
+        run: |
+          set -euo pipefail;
+          python3 - <<'SARIF_SCRIPT'
+          import glob
+          import json
+          import os
+          import sys
+
+          sarif_paths = sorted(glob.glob(os.path.join(os.environ["SARIF_DIRECTORY"], "*.sarif")))
+          if not sarif_paths:
+              print("::error title=No SARIF::the analysis wrote no SARIF file")
+              sys.exit(1)
+          result_count = 0
+          for sarif_path in sarif_paths:
+              with open(sarif_path, encoding="utf-8") as sarif_handle:
+                  sarif_document = json.load(sarif_handle)
+              for run in sarif_document.get("runs", []):
+                  for result in run.get("results", []):
+                      result_count += 1
+                      location = result.get("locations", [{}])[0].get("physicalLocation", {})
+                      path = location.get("artifactLocation", {}).get("uri", "?")
+                      line = location.get("region", {}).get("startLine", 0)
+                      message = result.get("message", {}).get("text", "").splitlines()[0:1]
+                      print(f"::error file={path},line={line},title={result.get('ruleId', 'codeql')}::{message[0] if message else ''}")
+          with open(os.environ["GITHUB_STEP_SUMMARY"], "a", encoding="utf-8") as summary_handle:
+              summary_handle.write(f"CodeQL python: {result_count} results\n")
+          print(f"CodeQL python: {result_count} results")
+          sys.exit(1 if result_count else 0)
+          SARIF_SCRIPT

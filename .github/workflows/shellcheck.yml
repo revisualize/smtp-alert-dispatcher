@@ -1,0 +1,88 @@
+# Path:     .github/workflows/shellcheck.yml
+# Project:  revisualized.com public repositories (github.com/revisualize)
+# Revision: 1
+# Updated:  2026-09-29
+#
+# Purpose:  Static analysis of every shell script, reported on its own badge.
+#           Byte-identical in every repository that carries it.
+#
+#           1. bash -n parses every script, so a syntax error is reported
+#              even where shellcheck would stop at the first one.
+#           2. shellcheck --severity=style runs over the same file list,
+#              so style findings fail the build along with errors.
+#
+# Contract: A repository with no shell scripts outside test/fixtures/ fails.
+#           A lint pass over zero files would report the same success as a
+#           pass over twenty, and this workflow is installed only where
+#           shell code exists. Shell files under any test/fixtures/ directory
+#           are test data and are not linted, because a fixture may be
+#           hazardous on purpose.
+#
+#           ci.yml runs the same shellcheck invocation inside its lint job.
+#           This workflow exists so the result has its own badge and its own
+#           per-file summary.
+#
+# Pins:     ubuntu-24.04, so the shellcheck version comes from the same
+#           archive ci.yml was verified against.
+
+name: shellcheck
+
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+defaults:
+  run:
+    shell: bash
+
+jobs:
+  shellcheck:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Install shellcheck
+        run: |
+          sudo apt-get update -q;
+          sudo apt-get install -y -q shellcheck;
+          shellcheck --version;
+
+      - name: Parse and lint every shell script outside test fixtures
+        run: |
+          set -euo pipefail;
+          mapfile -d '' shell_files < <(find . -name '*.sh' -type f \
+            -not -path './.git/*' -not -path '*/test/fixtures/*' -print0 | sort -z);
+          if [ "${#shell_files[@]}" -eq 0 ]; then
+            echo "::error title=No shell scripts::No shell scripts outside test/fixtures/. A lint pass over zero files is not reported as passing.";
+            exit 1;
+          fi;
+          {
+            echo "### shellcheck";
+            echo "";
+            echo "| Script | bash -n | shellcheck |";
+            echo "|---|---|---|";
+          } >> "${GITHUB_STEP_SUMMARY}";
+          failed_count=0;
+          for shell_file in "${shell_files[@]}"; do
+            syntax_result="pass";
+            lint_result="pass";
+            if ! bash -n "${shell_file}"; then
+              syntax_result="FAIL";
+            fi;
+            if ! shellcheck --severity=style --format=gcc "${shell_file}"; then
+              lint_result="FAIL";
+            fi;
+            if [ "${syntax_result}" != "pass" ] || [ "${lint_result}" != "pass" ]; then
+              failed_count=$((failed_count + 1));
+            fi;
+            echo "| \`${shell_file#./}\` | ${syntax_result} | ${lint_result} |" >> "${GITHUB_STEP_SUMMARY}";
+          done;
+          echo "" >> "${GITHUB_STEP_SUMMARY}";
+          echo "${#shell_files[@]} scripts checked, ${failed_count} with findings." | tee -a "${GITHUB_STEP_SUMMARY}";
+          if [ "${failed_count}" -ne 0 ]; then
+            exit 1;
+          fi;

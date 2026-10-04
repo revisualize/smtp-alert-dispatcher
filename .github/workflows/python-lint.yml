@@ -1,0 +1,64 @@
+# Path:     .github/workflows/python-lint.yml
+# Project:  revisualized.com public repositories (github.com/revisualize)
+# Revision: 1
+# Updated:  2026-09-29
+#
+# Purpose:  Static analysis of every Python module with ruff, on its default
+#           rule set: pyflakes (unused imports and variables, undefined names,
+#           placeholder-free f-strings) and the pycodestyle error classes that
+#           indicate a defect rather than a style preference. Byte-identical in
+#           every repository that carries it.
+#
+#           Formatting is deliberately out of scope. ruff format --check would
+#           fail on layout the author chose, which is a preference, and this
+#           badge reports defects.
+#
+# Contract: A repository with no Python outside test/fixtures/ fails, because
+#           this workflow is installed only where Python exists.
+#
+# Pins:     ruff 0.15.11, the version these repositories were verified against
+#           on 2026-09-29, so a new upstream default rule cannot turn a badge
+#           red without a change to the repository.
+
+name: python-lint
+
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+defaults:
+  run:
+    shell: bash
+
+jobs:
+  python-lint:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: actions/setup-python@v7
+        with:
+          python-version: "3.12"
+
+      - name: Install ruff
+        run: |
+          set -euo pipefail;
+          python -m pip install --quiet "ruff==0.15.11";
+          ruff --version;
+
+      - name: Lint every Python module outside test fixtures
+        run: |
+          set -euo pipefail;
+          mapfile -d '' python_files < <(find . -name '*.py' -type f \
+            -not -path './.git/*' -not -path '*/test/fixtures/*' -print0 | sort -z);
+          if [ "${#python_files[@]}" -eq 0 ]; then
+            echo "::error title=No Python::No Python modules outside test/fixtures/. A lint pass over zero files is not reported as passing.";
+            exit 1;
+          fi;
+          printf 'Linting %s\n' "${python_files[@]}";
+          ruff check --no-cache --output-format=github "${python_files[@]}";
+          echo "ruff: ${#python_files[@]} modules, no findings" >> "${GITHUB_STEP_SUMMARY}";

@@ -1,47 +1,27 @@
-# Path:     .github/workflows/ci.yml
+# Path:     .github/workflows/test.yml
 # Project:  revisualized.com public repositories (github.com/revisualize)
-# Revision: 9
+# Revision: 1
 # Updated:  2026-09-29
 #
-# Purpose:  One workflow, byte-identical in every repository that carries it.
-#           It knows nothing about any single repository. Each repository
-#           declares its own tests in test/run_all_tests.sh, which is the same
-#           command a reader runs locally:
+# Purpose:  Runs the repository's test suite and reports it on its own "test"
+#           badge. Byte-identical in every repository that carries it. The
+#           suite is declared in test/run_all_tests.sh, the same command a
+#           reader runs locally:
 #
 #               bash test/run_all_tests.sh;
 #
-# Contract: 1. test/run_all_tests.sh must exist. A repository that declares
-#              no tests fails. It is not reported as passing.
-#           2. The harness exits 0 only when every suite it runs has passed.
-#           3. For each suite, the harness appends a line
-#              "<label><TAB><count>" to the file named by TESTS_EXECUTED_FILE.
-#              The build fails if that file is missing, malformed, or totals
-#              zero, so a harness that ran nothing cannot report success.
-#              This catches an accidental zero. It cannot catch a harness
-#              that misreports its own count. Negative controls inside the
-#              harnesses are what test the tests.
+# Contract: Identical to the test job in ci.yml Revision 9:
+#           1. test/run_all_tests.sh must exist, or the run fails.
+#           2. The harness exits 0 only when every suite passed.
+#           3. Each suite appends "<label><TAB><count>" to TESTS_EXECUTED_FILE.
+#              A missing, malformed, or zero total fails the run, so a harness
+#              that ran nothing cannot report success.
+#           The job summary lists every suite and its test count.
 #
-#           Shell files under any test/fixtures/ directory are test data and
-#           are not linted, because a fixture may be hazardous on purpose.
-#
-# Pins:     ubuntu-24.04 rather than ubuntu-latest, so the environment a
-#           launched repository was verified against does not change under
-#           it. Python 3.9 is not published for Ubuntu 26.04 in the
-#           actions/python-versions manifest (checked 2026-09-26), so a
-#           moving label would eventually break the 3.9 leg.
-#           Python 3.9 is the oldest version any repository claims. 3.12
-#           adds a current release, and its unittest exits 5 when no test
-#           ran, which 3.9 does not.
-#
-# Revision 9 adds workflow_dispatch, so the workflow can be re-run from the
-# Actions tab without a new commit. Nothing else changed from Revision 8.
-#
-# Revision 8 replaces Revisions 4 through 7. Those revisions detected each
-# language and skipped cleanly when a suite was absent, so a repository with
-# no tests reported the same success as one with fifty, and the negative
-# control job named files from three unrelated repositories.
+# Matrix:   Python 3.9 (the oldest version any repository claims) and 3.12,
+#           on ubuntu-24.04, the environment ci.yml was verified against.
 
-name: ci
+name: test
 
 on:
   push:
@@ -56,31 +36,6 @@ defaults:
     shell: bash
 
 jobs:
-  lint:
-    runs-on: ubuntu-24.04
-    steps:
-      - uses: actions/checkout@v7
-
-      - name: Install shellcheck
-        run: |
-          sudo apt-get update -q;
-          sudo apt-get install -y -q shellcheck;
-          shellcheck --version;
-
-      - name: Static analysis of every shell script outside test fixtures
-        run: |
-          set -euo pipefail;
-          mapfile -d '' shell_files < <(find . -name '*.sh' -type f \
-            -not -path './.git/*' -not -path '*/test/fixtures/*' -print0 | sort -z);
-          if [ "${#shell_files[@]}" -eq 0 ]; then
-            echo "No shell scripts outside test/fixtures/. Nothing to lint.";
-            echo "shellcheck: no shell scripts to lint" >> "${GITHUB_STEP_SUMMARY}";
-            exit 0;
-          fi;
-          printf 'Linting %s\n' "${shell_files[@]}";
-          shellcheck --severity=style "${shell_files[@]}";
-          echo "shellcheck: ${#shell_files[@]} files, no findings" >> "${GITHUB_STEP_SUMMARY}";
-
   test:
     runs-on: ubuntu-24.04
     strategy:

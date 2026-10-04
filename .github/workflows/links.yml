@@ -1,0 +1,59 @@
+# Path:     .github/workflows/links.yml
+# Project:  revisualized.com public repositories (github.com/revisualize)
+# Revision: 1
+# Updated:  2026-09-29
+#
+# Purpose:  Checks that every link in every Markdown file still resolves:
+#           external URLs, links to revisualized.com articles, and relative
+#           links to files inside the repository. Byte-identical in every
+#           repository that carries it.
+#
+# Schedule: Runs on every push, and weekly on Monday, because a link breaks
+#           when the page it points to moves, with no commit here at all.
+#           GitHub disables scheduled workflows in a public repository after
+#           60 days with no repository activity. A push, or a manual run
+#           from the Actions tab, re-enables the schedule.
+#
+# Scope:    Code blocks are skipped (lychee's default), so example commands
+#           and sample output are not fetched. Loopback, private addresses,
+#           and the reserved example domains are excluded as a second guard.
+#           HTTP 429 counts as reachable: it means the host rate limited this
+#           runner, which says nothing about the link.
+#
+# Pins:     lycheeverse/lychee-action@v2, the current major on 2026-09-29.
+
+name: links
+
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+  schedule:
+    - cron: "17 15 * * 1"
+
+permissions:
+  contents: read
+
+jobs:
+  links:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Check every link in every Markdown file
+        uses: lycheeverse/lychee-action@v2
+        with:
+          fail: true
+          jobSummary: true
+          args: >-
+            --no-progress
+            --max-retries 3
+            --retry-wait-time 10
+            --timeout 30
+            --accept "100..=103,200..=299,429"
+            --exclude-all-private
+            --exclude "^https?://([^/]+\.)?example\.(com|net|org)([/:]|$)"
+            --exclude "^https?://[^/]+\.internal([/:]|$)"
+            --exclude-path examples
+            --exclude-path test/fixtures
+            "./**/*.md"
