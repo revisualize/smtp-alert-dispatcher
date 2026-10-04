@@ -11,7 +11,6 @@ No network. deliver_message is replaced in every test.
 """
 
 import json
-import os
 import shutil
 import smtplib
 import sys
