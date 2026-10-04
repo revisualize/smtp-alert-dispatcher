@@ -1,6 +1,15 @@
 # smtp-alert-dispatcher
 
-![ci](https://github.com/revisualize/smtp-alert-dispatcher/actions/workflows/ci.yml/badge.svg)
+[![ci](https://github.com/revisualize/smtp-alert-dispatcher/actions/workflows/ci.yml/badge.svg)](https://github.com/revisualize/smtp-alert-dispatcher/actions/workflows/ci.yml)
+[![test](https://github.com/revisualize/smtp-alert-dispatcher/actions/workflows/test.yml/badge.svg)](https://github.com/revisualize/smtp-alert-dispatcher/actions/workflows/test.yml)
+[![shellcheck](https://github.com/revisualize/smtp-alert-dispatcher/actions/workflows/shellcheck.yml/badge.svg)](https://github.com/revisualize/smtp-alert-dispatcher/actions/workflows/shellcheck.yml)
+[![python-compat](https://github.com/revisualize/smtp-alert-dispatcher/actions/workflows/python-compat.yml/badge.svg)](https://github.com/revisualize/smtp-alert-dispatcher/actions/workflows/python-compat.yml)
+[![python-lint](https://github.com/revisualize/smtp-alert-dispatcher/actions/workflows/python-lint.yml/badge.svg)](https://github.com/revisualize/smtp-alert-dispatcher/actions/workflows/python-lint.yml)
+[![codeql](https://github.com/revisualize/smtp-alert-dispatcher/actions/workflows/codeql.yml/badge.svg)](https://github.com/revisualize/smtp-alert-dispatcher/actions/workflows/codeql.yml)
+[![markdown-lint](https://github.com/revisualize/smtp-alert-dispatcher/actions/workflows/markdown-lint.yml/badge.svg)](https://github.com/revisualize/smtp-alert-dispatcher/actions/workflows/markdown-lint.yml)
+[![links](https://github.com/revisualize/smtp-alert-dispatcher/actions/workflows/links.yml/badge.svg)](https://github.com/revisualize/smtp-alert-dispatcher/actions/workflows/links.yml)
+[![content-policy](https://github.com/revisualize/smtp-alert-dispatcher/actions/workflows/content-policy.yml/badge.svg)](https://github.com/revisualize/smtp-alert-dispatcher/actions/workflows/content-policy.yml)
+[![license: all rights reserved](https://img.shields.io/badge/license-all%20rights%20reserved-lightgrey)](LICENSE)
 
 Alert email delivery for hosts with no mail agent. A caller hands it a subject and a body. It delivers to the relay over STARTTLS, and when the relay is unreachable it writes the message to a disk spool and retries on the next flush.
 
@@ -86,6 +95,24 @@ Python 3.9 or newer. Standard library only, no third-party packages.
 ```sh
 python3 -m unittest discover -s test -v ;
 ```
+
+## Continuous integration
+
+Each badge above is its own GitHub Actions workflow in `.github/workflows/`. Every workflow runs on each push and pull request, can be re-run by hand from the Actions tab, and links to its run history.
+
+| Workflow | A green badge means |
+|---|---|
+| [`ci`](https://github.com/revisualize/smtp-alert-dispatcher/actions/workflows/ci.yml) | `bash test/run_all_tests.sh` passed on Python 3.9 and 3.12 and reported a non-zero count of executed tests, and shellcheck found nothing at style severity. |
+| [`test`](https://github.com/revisualize/smtp-alert-dispatcher/actions/workflows/test.yml) | `bash test/run_all_tests.sh` passed on Python 3.9 and 3.12. The run fails if any suite fails or if zero tests executed, and the job summary lists each suite with its test count. |
+| [`shellcheck`](https://github.com/revisualize/smtp-alert-dispatcher/actions/workflows/shellcheck.yml) | Every shell script outside `test/fixtures/` parses with `bash -n` and has no shellcheck findings at style severity. |
+| [`python-compat`](https://github.com/revisualize/smtp-alert-dispatcher/actions/workflows/python-compat.yml) | The test suite passed under every Python release from 3.9 through 3.14. |
+| [`python-lint`](https://github.com/revisualize/smtp-alert-dispatcher/actions/workflows/python-lint.yml) | ruff found no defects (unused imports, undefined names, and similar) in any Python module. |
+| [`codeql`](https://github.com/revisualize/smtp-alert-dispatcher/actions/workflows/codeql.yml) | GitHub CodeQL security analysis of the Python code reported no results. |
+| [`markdown-lint`](https://github.com/revisualize/smtp-alert-dispatcher/actions/workflows/markdown-lint.yml) | Every Markdown file passes markdownlint. |
+| [`links`](https://github.com/revisualize/smtp-alert-dispatcher/actions/workflows/links.yml) | Every link in every Markdown file resolved on the latest run. It also runs weekly, because a link can break with no commit here. |
+| [`content-policy`](https://github.com/revisualize/smtp-alert-dispatcher/actions/workflows/content-policy.yml) | Every tracked file meets the publishing rules: UTF-8, LF line endings, no em dashes, scripts documented as `bash name.sh`, and vendor-neutral wording. |
+
+A badge reports the latest run of those checks. What the tool needs on your own host is listed under Requirements.
 
 ## License
 
