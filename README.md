@@ -11,6 +11,8 @@
 [![content-policy](https://github.com/revisualize/smtp-alert-dispatcher/actions/workflows/content-policy.yml/badge.svg)](https://github.com/revisualize/smtp-alert-dispatcher/actions/workflows/content-policy.yml)
 [![license: all rights reserved](https://img.shields.io/badge/license-all%20rights%20reserved-lightgrey)](LICENSE)
 
+**Project page:** [revisualized.com/projects/smtp-alert-dispatcher](https://revisualized.com/projects/smtp-alert-dispatcher)
+
 Alert email delivery for hosts with no mail agent. A caller hands it a subject and a body. It delivers to the relay over STARTTLS, and when the relay is unreachable it writes the message to a disk spool and retries on the next flush.
 
 The design holds one promise: the message is delivered, or it is on disk. Never neither. A degraded network is exactly the condition that produces alerts and exactly the condition under which a fire-and-forget sender loses them.
