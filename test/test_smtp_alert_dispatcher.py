@@ -6,8 +6,9 @@ Organized around the one promise the tool makes: a message is delivered, or
 it is on disk. Never neither. Each test either proves that promise holds or
 proves a specific way it could quietly stop holding.
 
-No network. deliver_message is replaced in every test that exercises
-delivery, because a test that needs a relay is a test that gets skipped.
+No network. Delivery tests either replace deliver_message or replace
+smtplib.SMTP with a fake transport, depending on what they exercise,
+because a test that needs a relay is a test that gets skipped.
 """
 
 import fcntl
@@ -106,13 +107,18 @@ class SpoolingIsAtomic(DispatcherTestCase):
         """The atomic write depends on the temp suffix missing the *.json glob.
 
         If that suffix ever becomes .json, flush will try to parse a
-        partially written file and raise mid-run.
+        partially written file and dead-letter it mid-write.
         """
         self.silence_stdout()
         spool = Path(self.configuration["spool_directory"])
-        (spool / "1700000000_partial.tmp").write_text('{"incomp')
+        partial = spool / "1700000000_partial.tmp"
+        partial.write_text('{"incomp')
         self.assertEqual(self.pending(), [])
         self.assertEqual(dispatcher.command_status(self.configuration), 0)
+        self.patch_delivery(deliver_successfully)
+        self.assertEqual(dispatcher.command_flush(self.configuration), 0)
+        self.assertTrue(partial.exists(), "flush touched a half-written record")
+        self.assertEqual(self.dead_letters(), [])
 
 
 class SendDeliversOrSpools(DispatcherTestCase):
@@ -193,21 +199,29 @@ class FlushSemantics(DispatcherTestCase):
         self.assertEqual(remaining, ["poison"], "the healthy message was not delivered")
 
     def test_the_attempt_ceiling_retires_a_message_to_dead_letters(self):
-        """max_delivery_attempts is 3 here, so the third run retires it."""
+        """max_delivery_attempts is 3 and a new record already counts 1.
+
+        The send that spooled it was attempt 1, so the first rejected flush
+        is attempt 2 and the second rejected flush is attempt 3, which
+        retires it.
+        """
         self.spool()
         self.patch_delivery(reject_at_message_level)
-        for _ in range(3):
-            dispatcher.command_flush(self.configuration)
+        self.assertEqual(dispatcher.command_flush(self.configuration), 1)
+        self.assertEqual(len(self.pending()), 1)
+        self.assertEqual(self.dead_letters(), [])
+        self.assertEqual(dispatcher.command_flush(self.configuration), 0)
         self.assertEqual(self.pending(), [])
         self.assertEqual(len(self.dead_letters()), 1)
 
     def test_a_concurrent_flush_declines_rather_than_double_sending(self):
+        """The declining flush reports the spool as it stands: 1, pending."""
         self.spool()
         self.patch_delivery(deliver_successfully)
-        holder = open(self.configuration["lock_file"], "w")
+        holder = open(self.configuration["lock_file"], "a")
         fcntl.flock(holder, fcntl.LOCK_EX | fcntl.LOCK_NB)
         try:
-            self.assertEqual(dispatcher.command_flush(self.configuration), 0)
+            self.assertEqual(dispatcher.command_flush(self.configuration), 1)
             self.assertEqual(len(self.pending()), 1,
                              "the locked-out flush delivered anyway")
         finally:
@@ -378,9 +392,13 @@ class StableMessageIdentity(DispatcherTestCase):
             def starttls(self, **kwargs):
                 pass
 
-            def send_message(self, outgoing):
+            def send_message(self, outgoing, **kwargs):
                 captured["message_id"] = outgoing["Message-ID"]
                 captured["date"] = outgoing["Date"]
+                return {}
+
+            def quit(self):
+                pass
 
         with mock.patch.object(dispatcher.smtplib, "SMTP", FakeSMTP):
             dispatcher.deliver_message(self.configuration, record)
@@ -406,8 +424,12 @@ class StableMessageIdentity(DispatcherTestCase):
             def starttls(self, **kwargs):
                 pass
 
-            def send_message(self, outgoing):
+            def send_message(self, outgoing, **kwargs):
                 sent.append(outgoing["Message-ID"])
+                return {}
+
+            def quit(self):
+                pass
 
         with mock.patch.object(dispatcher.smtplib, "SMTP", FakeSMTP):
             dispatcher.deliver_message(self.configuration, legacy)

@@ -25,9 +25,9 @@ from pathlib import Path
 
 SOURCE = Path(__file__).resolve().parent.parent / "smtp_alert_dispatcher.py"
 
-ATOMIC_CALL = "            write_record_atomically(pending_path, message_record)"
+ATOMIC_CALL = "    write_record_atomically(pending_path, message_record)"
 IN_PLACE_CALL = (
-    "            pending_path.write_text(json.dumps(message_record, indent=2))"
+    "    pending_path.write_text(json.dumps(message_record, indent=2))"
 )
 
 STABLE_IDENTITY = (
@@ -37,7 +37,8 @@ STABLE_IDENTITY = (
 PER_ATTEMPT_IDENTITY = '    outgoing_message["Message-ID"] = email.utils.make_msgid()'
 
 GUARDED_LOAD_START = "        try:\n            message_record = load_spool_record(pending_path)"
-UNGUARDED_LOAD = "        message_record = json.loads(pending_path.read_text())\n        try:"
+DELIVERY_TRY = "        try:\n            refused_recipients = deliver_message("
+UNGUARDED_LOAD = "        message_record = json.loads(pending_path.read_text())\n"
 
 
 def invert_handler_order(source):
@@ -47,9 +48,9 @@ def invert_handler_order(source):
     reclassified as a connection failure. attempt_count never rises and
     nothing ever reaches the dead-letter directory.
     """
-    smtp_start = source.index("        except smtplib.SMTPException:")
+    smtp_start = source.index("        except smtplib.SMTPException as rejection_error:")
     oserror_start = source.index("        except OSError as connection_error:")
-    tail_start = source.index("    remaining_count =")
+    tail_start = source.index("        if refused_recipients:\n            message_record[\"pending_recipients\"]")
     smtp_block = source[smtp_start:oserror_start]
     oserror_block = source[oserror_start:tail_start]
     return source.replace(smtp_block + oserror_block, oserror_block + smtp_block)
@@ -101,8 +102,8 @@ def unguard_spool_read(source):
     spool and a busy spool are indistinguishable from outside.
     """
     guard_start = source.index(GUARDED_LOAD_START)
-    body_start = source.index("        try:\n            deliver_message(")
-    return source[:guard_start] + UNGUARDED_LOAD + source[body_start + len("        try:"):]
+    body_start = source.index(DELIVERY_TRY)
+    return source[:guard_start] + UNGUARDED_LOAD + source[body_start:]
 
 
 DEFECTS = {
